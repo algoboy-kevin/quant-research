@@ -54,16 +54,19 @@ def _asof(df, right, *, left_on, key, strict=False):
 
 def measure(targets: pl.DataFrame, quotes: pl.DataFrame, *, t: str = "t_mono", key: str = "asset_id",
             value: str = "mid", t_q: str | None = None, horizons_s=(0.25, 0.5, 1, 2, 5),
-            lookbacks_s=(0.5, 1.0), react_s: float = 0.25, scale: float = 100.0,
-            t_end: float | None = None) -> pl.DataFrame:
+            lookbacks_s=(0.5, 1.0), react_s: float | None = 0.25, scale: float = 100.0,
+            t_end: float | None = None, max_age_s: float | None = None, carry=()) -> pl.DataFrame:
     """Append pre-state, forward moves and trailing moves to `targets`.
 
     Added columns: pre, pre_age_ms, pre_latest_valid, move_<ms>, label_<ms>,
-    prior_<ms> (= pre - value(t-lb): the move already made), n_updates_react.
+    prior_<ms> (= pre - value(t-lb): the move already made), n_updates_react, and
+    pre_<c> for every column named in `carry` (other quote columns as of the pre-state row).
     `t_end` (default: last quote time) censors horizons that run past the capture.
+    `max_age_s` treats a pre-state or label older than that as missing (stale quote).
     """
     t_q = t_q or t
-    q_all = quotes.select(key, pl.col(t_q).alias("_tq"), pl.col(value).alias("_v")).sort("_tq")
+    q_all = quotes.select(key, pl.col(t_q).alias("_tq"), pl.col(value).alias("_v"),
+                          *[pl.col(c).alias(f"_c_{c}") for c in carry]).sort("_tq")
     q_valid = q_all.filter(pl.col("_v").is_not_null())
     cnt = q_all.with_columns((pl.int_range(pl.len()).over(key) + 1).alias("_v")).select(key, "_tq", "_v")
     if t_end is None:
@@ -72,23 +75,30 @@ def measure(targets: pl.DataFrame, quotes: pl.DataFrame, *, t: str = "t_mono", k
     df = targets.with_row_index("_i").sort(t)
 
     # state STRICTLY before the event; keep the observation time to report staleness
-    df = df.with_columns(pl.col(t).alias("_t0"))
-    df = _asof(df, q_valid.with_columns(pl.col("_tq").alias("_pre_t")).rename({"_v": "pre"}),
+    df = _asof(df, q_valid.with_columns(pl.col("_tq").alias("_pre_t"))
+               .rename({"_v": "pre", **{f"_c_{c}": f"pre_{c}" for c in carry}}),
                left_on=t, key=key, strict=True)
-    df = _asof(df, q_all.with_columns(pl.col("_tq").alias("_lat_t")).rename({"_v": "_lat"}),
+    df = _asof(df, q_all.select(key, "_tq", pl.col("_tq").alias("_lat_t"), pl.col("_v").alias("_lat")),
                left_on=t, key=key, strict=True)
     df = df.with_columns(
         ((pl.col(t) - pl.col("_pre_t")) * 1000).round(3).alias("pre_age_ms"),
         (pl.col("_lat_t").is_not_null() & pl.col("_lat").is_not_null()).alias("pre_latest_valid"),
-    ).drop("_pre_t", "_lat_t", "_lat", "_t0")
+    ).drop("_pre_t", "_lat_t", "_lat")
+    if max_age_s is not None:
+        stale = pl.col("pre_age_ms") > max_age_s * 1000
+        df = df.with_columns(*[pl.when(stale).then(None).otherwise(pl.col(c)).alias(c)
+                               for c in ["pre", *[f"pre_{c}" for c in carry]]])
 
     for h in horizons_s:
         k = _ms(h)
         df = df.with_columns((pl.col(t) + h).alias("_th"))
-        df = _asof(df, q_valid.rename({"_v": f"label_{k}"}), left_on="_th", key=key)
-        censored = (pl.col("_th") > t_end) | pl.col("pre").is_null()
-        df = df.with_columns(pl.when(censored).then(None).otherwise(pl.col(f"label_{k}")).alias(f"label_{k}"))
-        df = df.with_columns(((pl.col(f"label_{k}") - pl.col("pre")) * scale).round(6).alias(f"move_{k}")).drop("_th")
+        df = _asof(df, q_valid.select(key, "_tq", pl.col("_v").alias(f"label_{k}"), pl.col("_tq").alias("_lt")),
+                   left_on="_th", key=key)
+        bad = (pl.col("_th") > t_end) | pl.col("pre").is_null()
+        if max_age_s is not None:
+            bad = bad | ((pl.col("_th") - pl.col("_lt")) > max_age_s)
+        df = df.with_columns(pl.when(bad).then(None).otherwise(pl.col(f"label_{k}")).alias(f"label_{k}"))
+        df = df.with_columns(((pl.col(f"label_{k}") - pl.col("pre")) * scale).round(6).alias(f"move_{k}")).drop("_th", "_lt")
 
     for lb in lookbacks_s:
         k = _ms(lb)
@@ -96,13 +106,13 @@ def measure(targets: pl.DataFrame, quotes: pl.DataFrame, *, t: str = "t_mono", k
         df = _asof(df, q_valid.rename({"_v": "_past"}), left_on="_tb", key=key).sort(t)
         df = df.with_columns(((pl.col("pre") - pl.col("_past")) * scale).round(6).alias(f"prior_{k}")).drop("_tb", "_past")
 
-    # number of quote updates in (t, t+react]
-    df = df.with_columns((pl.col(t) + react_s).alias("_tr")).sort("_tr")
-    df = _asof(df, cnt.rename({"_v": "_c_hi"}), left_on="_tr", key=key).sort(t)
-    df = _asof(df, cnt.rename({"_v": "_c_lo"}), left_on=t, key=key)
-    df = df.with_columns(pl.when(pl.col("_tr") <= t_end)
-                         .then(pl.col("_c_hi").fill_null(0) - pl.col("_c_lo").fill_null(0))
-                         .otherwise(None).alias("n_updates_react")).drop("_tr", "_c_hi", "_c_lo")
+    if react_s is not None:   # number of quote updates in (t, t+react]
+        df = df.with_columns((pl.col(t) + react_s).alias("_tr")).sort("_tr")
+        df = _asof(df, cnt.rename({"_v": "_c_hi"}), left_on="_tr", key=key).sort(t)
+        df = _asof(df, cnt.rename({"_v": "_c_lo"}), left_on=t, key=key)
+        df = df.with_columns(pl.when(pl.col("_tr") <= t_end)
+                             .then(pl.col("_c_hi").fill_null(0) - pl.col("_c_lo").fill_null(0))
+                             .otherwise(None).alias("n_updates_react")).drop("_tr", "_c_hi", "_c_lo")
     return df.sort("_i").drop("_i")
 
 

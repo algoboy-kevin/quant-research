@@ -65,3 +65,43 @@ def cluster_bootstrap_ci(groups: Mapping[object, Sequence[float]], stat: Callabl
         draws.append(stat(pooled))
     draws.sort()
     return draws[int(alpha / 2 * n_boot)], draws[min(n_boot - 1, int((1 - alpha / 2) * n_boot))]
+
+
+def cluster_ratio_ci(groups: Mapping[object, tuple[float, float]], *, n_boot=2000, alpha=0.05, seed=0):
+    """Cluster bootstrap CI of a weighted mean = sum(num)/sum(den) with whole clusters resampled.
+
+    `groups[key] = (sum of weight*value, sum of weight)`. Use for notional-weighted means
+    (e.g. markout bps per coin). Returns (point, lo, hi) or None with fewer than 3 clusters.
+    """
+    keys = [k for k, (_, d) in groups.items() if d]
+    if len(keys) < 3:
+        return None
+    rng = random.Random(seed)
+    point = sum(groups[k][0] for k in keys) / sum(groups[k][1] for k in keys)
+    draws = []
+    for _ in range(n_boot):
+        pick = [keys[rng.randrange(len(keys))] for _ in keys]
+        den = sum(groups[k][1] for k in pick)
+        draws.append(sum(groups[k][0] for k in pick) / den if den else 0.0)
+    draws.sort()
+    return point, draws[int(alpha / 2 * n_boot)], draws[min(n_boot - 1, int((1 - alpha / 2) * n_boot))]
+
+
+def subset_resample(values: Mapping[object, float], sizes, *, draws=5000, seed=0, exclude=()):
+    """Breadth effect: how does the SUM over a random subset of N units behave as N grows?
+
+    `values[key]` is each unit's contribution (e.g. net markout $ per coin). For every N in
+    `sizes` draw `draws` random subsets (without replacement within a draw) and report
+    mean / p10 / p90 of the sum and P(sum > 0). `exclude` drops units first (e.g. top-3
+    contributors) to show the effect is not carried by a few names.
+    """
+    rng = random.Random(seed)
+    pool = [v for k, v in values.items() if k not in set(exclude)]
+    out = []
+    for n in sizes:
+        if n > len(pool):
+            continue
+        sums = sorted(sum(rng.sample(pool, n)) for _ in range(draws))
+        out.append({"n": n, "mean": sum(sums) / draws, "p10": sums[int(0.10 * draws)], "p90": sums[int(0.90 * draws)],
+                    "p_pos": sum(x > 0 for x in sums) / draws})
+    return out
