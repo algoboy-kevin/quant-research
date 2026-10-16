@@ -97,12 +97,14 @@ def breadth(by_coin: pl.DataFrame, sizes=(5, 10, 20, 40), *, exclude_top: int = 
     top = list(by_coin["coin"].head(exclude_top))
     rows = [{"universe": "all", **r} for r in stats.subset_resample(vals, sizes, draws=draws, seed=seed)]
     rows += [{"universe": f"ex-top{exclude_top}", **r} for r in stats.subset_resample(vals, sizes, draws=draws, seed=seed, exclude=top)]
-    return pl.from_dicts(rows, infer_schema_length=None)
+    schema = {"universe": pl.Utf8, "n": pl.Int64, "mean": pl.Float64, "p10": pl.Float64, "p90": pl.Float64, "p_pos": pl.Float64}
+    return pl.from_dicts(rows, schema=schema) if rows else pl.DataFrame(schema=schema)   # sizes larger than the coin pool are skipped
 
 
 def time_blocks(df: pl.DataFrame, mask: pl.Expr, value: str, block_s: float = 600) -> pl.DataFrame:
-    """Net $ of a slice per time block (is the profit clustered in a few events?)."""
+    """Net $ of a slice per time block (is the profit clustered in a few events?). `t` is epoch seconds."""
     return (df.filter(mask & pl.col(value).is_not_null())
-            .with_columns((pl.col("t") // block_s).alias("block"))
-            .group_by("block").agg(((pl.col(value) * pl.col("notional")).sum() / 1e4).alias("net_usd"))
-            .sort("net_usd", descending=True))
+            .with_columns(((pl.col("t") // block_s) * block_s).alias("block_start"))
+            .group_by("block_start").agg(((pl.col(value) * pl.col("notional")).sum() / 1e4).alias("net_usd"))
+            .with_columns(pl.from_epoch("block_start", time_unit="s").dt.strftime("%m-%d %H:%MZ").alias("block_utc"))
+            .select("block_utc", "net_usd", "block_start").sort("net_usd", descending=True))

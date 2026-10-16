@@ -123,7 +123,12 @@ def test_concentration_breadth_and_time_blocks():
     assert allp[-1] >= allp[0]                              # more coins -> positive sum more often
     assert set(b["universe"]) == {"all", "ex-top1"}
     tb = F.time_blocks(d, pl.col("dfill_bps") >= 3, "net_60000", block_s=1000)
-    assert tb["net_usd"].is_sorted(descending=True)
+    assert tb["net_usd"].is_sorted(descending=True) and tb["block_utc"][0].endswith("Z")
+
+
+def test_breadth_with_too_few_coins_is_empty_not_an_error():
+    bc = F.net_by_coin(synth(n_coins=3), "net_60000")
+    assert F.breadth(bc, sizes=(5, 10)).height == 0
 
 
 def test_clustered_slice_needs_three_clusters():
