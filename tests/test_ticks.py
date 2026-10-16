@@ -10,6 +10,14 @@ from quant_research.perp.hl_forensics.ticks import tick_size
     (0.5, 0, 1e-5),         # <1: 5 sig figs counted after leading zeros
     (0.012345, 0, 1e-6),    # capped by 6 - szDecimals
     (0.012345, 3, 1e-3),    # szDecimals 3 -> at most 3 decimals
+    # observed live (venue docs / worked table)
+    (68755.0, 5, 1.0),      # JP225
+    (1188.0, 4, 0.1),       # LLY
+    (7773.0, 3, 0.1),       # SP500
+    (336.0, 3, 0.01),       # AAPL
+    (6.686, 2, 1e-4),       # COPPER
+    (7.56, 1, 1e-4),        # CXMT
+    (3.361, 1, 1e-4),       # NATGAS
 ])
 def test_tick_size(px, szd, expected):
     assert tick_size(px, szd) == pytest.approx(expected)
