@@ -1,34 +1,16 @@
-"""Hyperliquid read API: every query is a POST to /info (stdlib only)."""
-import json
-import time
-import urllib.error
-import urllib.request
+"""Hyperliquid read API: every query is a POST to /info (stdlib only).
+
+Transport (retry on 429/5xx/network, User-Agent) lives in `quant_research.common.http`;
+this module only adds the Hyperliquid endpoint and dex helpers.
+"""
+from quant_research.common.http import post_json
 
 API = "https://api.hyperliquid.xyz/info"
 
 
 def post(payload, timeout=30, url=API, retries=2):
-    """POST one /info query and return the decoded JSON.
-
-    Retries on HTTP 429/5xx and network errors with a short backoff; any other
-    HTTP error is raised immediately.
-    """
-    data = json.dumps(payload).encode()
-    for attempt in range(retries + 1):
-        req = urllib.request.Request(
-            url, data=data, headers={"Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read().decode())
-        except urllib.error.HTTPError as e:
-            if e.code != 429 and e.code < 500:
-                raise
-            err = e
-        except (urllib.error.URLError, TimeoutError) as e:
-            err = e
-        if attempt == retries:
-            raise err
-        time.sleep(1.5 * (attempt + 1))
+    """POST one /info query and return the decoded JSON."""
+    return post_json(url, payload, timeout=timeout, retries=retries)
 
 
 def dex_arg(dex):

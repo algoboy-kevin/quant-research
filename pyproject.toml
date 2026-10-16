@@ -1,20 +1,32 @@
 [project]
 name = "quant-research"
-version = "0.1.0"
-description = "Research tooling for perp-style and prediction markets (Hyperliquid, Polymarket)."
-requires-python = ">=3.9"
-dependencies = []
+version = "0.2.0"
+description = "Reusable research tooling (collect / compute / report) for perp-style and prediction markets."
+requires-python = ">=3.10"
+# polars is core: every compute step returns/consumes DataFrames (fast, columnar, joinable)
+dependencies = ["polars>=1.0"]
 
 [project.optional-dependencies]
+# live listeners (Hyperliquid wallet capture, Polymarket sports/book capture)
 capture = ["websockets>=12"]
+# plotting
+analysis = ["numpy", "matplotlib"]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "websockets>=12"]
 
 [project.scripts]
+# perp / Hyperliquid
 hl-snapshot = "quant_research.perp.hl_forensics.cli.snapshot:main"
 hl-ladder   = "quant_research.perp.hl_forensics.cli.ladder:main"
 hl-probe    = "quant_research.perp.hl_forensics.cli.probe:main"
+# prediction / Polymarket
+pm-capture-sports = "quant_research.prediction.polymarket.cli.capture_sports:main"
+pm-capture-books  = "quant_research.prediction.polymarket.cli.capture_books:main"
+pm-tape-info      = "quant_research.prediction.polymarket.cli.tape_info:main"
+pm-wallet         = "quant_research.prediction.polymarket.cli.wallet:main"
+# scaffolding for new studies (written OUTSIDE this repo)
+qr-new-study = "quant_research.scaffold:main"
 
 [build-system]
 requires = ["hatchling"]
