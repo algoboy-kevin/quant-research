@@ -25,8 +25,9 @@ pm-capture-sports = "quant_research.prediction.polymarket.cli.capture_sports:mai
 pm-capture-books  = "quant_research.prediction.polymarket.cli.capture_books:main"
 pm-tape-info      = "quant_research.prediction.polymarket.cli.tape_info:main"
 pm-wallet         = "quant_research.prediction.polymarket.cli.wallet:main"
-# scaffolding for new studies (written OUTSIDE this repo)
+# scaffolding / index for the private lab repo (studies are written OUTSIDE this repo)
 qr-new-study = "quant_research.scaffold:main"
+qr-index     = "quant_research.lab:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -1,8 +1,8 @@
 """qr-new-study: stamp out a research study OUTSIDE this repo, wired to the shared toolkit.
 
 The toolkit (collect / compute / report) is public and reusable; the *edge research*
-(hypotheses, findings, raw data, run outputs) stays in a private folder - by default
-~/research/<venue>/<study>/. The generated study.py only contains the glue:
+(hypotheses, findings, raw data, run outputs) lives in the private lab repo (alpha-lab) -
+by default <lab>/<venue>/<study>/. The generated study.py only contains the glue:
 
     load -> compute -> report        (each step a function you replace)
 
@@ -12,13 +12,22 @@ summary.md and a test file instead of from boilerplate.
 from __future__ import annotations
 
 import argparse
+import os
 import re
+from datetime import date
 from pathlib import Path
+
+from quant_research.lab import FINDINGS_TEMPLATE
+
+
+def lab_root() -> Path:
+    """The private research lab: $ALPHA_LAB, else ~/Documents/Github/alpha-lab."""
+    return Path(os.environ.get("ALPHA_LAB", "~/Documents/Github/alpha-lab")).expanduser()
 
 STUDY = '''"""{name} - {venue} study (private; uses the quant_research toolkit).
 
-Run:   uv run --project {repo} python study.py --src <data dir> --tag {tag}
-Test:  uv run --project {repo} python -m unittest test_study -v
+Run:   uv run python {venue}/{slug}/study.py --src <data dir> --tag {tag}     (from the lab root)
+Test:  uv run python -m pytest {venue}/{slug}
 """
 import argparse
 from pathlib import Path
@@ -33,7 +42,7 @@ from quant_research.common.runs import RunFolder
 #             from quant_research.prediction.polymarket.scores import detect_events
 # Hyperliquid: from quant_research.perp.hl_forensics.info_client import post, list_dexes
 
-OUT_ROOT = Path(__file__).parent / "runs"
+OUT_ROOT = Path(__file__).parent / "runs"      # gitignored; findings go in FINDINGS.md
 
 
 def load(src: Path) -> dict:
@@ -97,11 +106,16 @@ description | proxy | simulation | live   (state it; do not claim above it)
 - failure to show an effect is a valid result
 '''
 
-TEST = '''import unittest
+TEST = '''import importlib.util
+import pathlib
+import unittest
 
 import polars as pl
 
-import study
+# load the sibling study.py by path: every study has one, so `import study` would collide
+_spec = importlib.util.spec_from_file_location("study", pathlib.Path(__file__).with_name("study.py"))
+study = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(study)
 
 
 class StudyTests(unittest.TestCase):
@@ -123,16 +137,19 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("venue", help="e.g. polymarket, hyperliquid")
     ap.add_argument("name", help="study name, e.g. sports-adverse")
-    ap.add_argument("--root", default="~/research", help="private research root (NOT this repo)")
+    ap.add_argument("--root", default=None, help="lab root (default: $ALPHA_LAB or ~/Documents/Github/alpha-lab)")
     ap.add_argument("--tag", default="first")
     a = ap.parse_args(argv)
     repo = Path(__file__).resolve().parents[2]
-    dest = Path(a.root).expanduser() / slug(a.venue) / slug(a.name)
+    root = Path(a.root).expanduser() if a.root else lab_root()
+    dest = root / slug(a.venue) / slug(a.name)
     if repo in dest.resolve().parents or dest.resolve() == repo:
         raise SystemExit(f"refusing to write a study inside the toolkit repo ({repo}); use --root outside it")
     dest.mkdir(parents=True, exist_ok=True)
-    files = {"study.py": STUDY.format(name=a.name, venue=a.venue, repo=repo, tag=a.tag),
-             "SPEC.md": SPEC.format(name=a.name), "test_study.py": TEST}
+    v, sl = slug(a.venue), slug(a.name)
+    files = {"study.py": STUDY.format(name=a.name, venue=v, slug=sl, tag=a.tag),
+             "SPEC.md": SPEC.format(name=a.name), "test_study.py": TEST,
+             "FINDINGS.md": FINDINGS_TEMPLATE.format(name=a.name, venue=v, slug=sl, date=date.today().isoformat())}
     for fn, body in files.items():
         f = dest / fn
         if f.exists():
