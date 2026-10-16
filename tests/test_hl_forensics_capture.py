@@ -195,3 +195,30 @@ def test_skew_uses_signed_inventory_and_end_positions():
     assert r["slope_bps_per_1m"] < 0
     fills = pl.DataFrame({"t": [1.0, 2.0], "coin": ["a", "a"], "side": ["B", "A"], "sz": [5.0, 2.0], "start_position": [10.0, 15.0]})
     assert L.end_positions(fills)["position"].item() == pytest.approx(13.0)
+
+
+# ------------------------------------------------------------------ state snapshots
+def snap_msg(label, kind, dex, data, rx0=1_000_000, rx1=1_000_400):
+    return {"rx": rx1, "msg": {"channel": "__snap__", "label": label, "kind": kind, "dex": dex, "rx0": rx0, "rx1": rx1, "data": data}}
+
+
+def test_snapshots_are_parsed_signed_and_timed_by_bracket(tmp_path):
+    meta = [{"universe": [{"name": "xyz:A", "szDecimals": 2}, {"name": "xyz:B", "szDecimals": 0}]}, []]
+    msgs = [snap_msg("start", "orders", "xyz", [{"coin": "xyz:A", "side": "B", "limitPx": "9.5", "sz": "3", "oid": 7, "tif": "Alo",
+                                                   "reduceOnly": False, "isTrigger": False}]),
+            snap_msg("start", "state", "xyz", {"assetPositions": [{"position": {"coin": "xyz:A", "szi": "-12.5", "entryPx": "9.9", "positionValue": "125.0"}},
+                                                                  {"position": {"coin": "xyz:B", "szi": "0.0", "entryPx": "1", "positionValue": "0"}}]}),
+            snap_msg("start", "mids", "xyz", {"xyz:A": "10.0"}), snap_msg("start", "meta", "xyz", meta),
+            snap_msg("end", "orders_error", "xyz", {"error": "boom"})]
+    c = load_wallet_capture(write(tmp_path, msgs))
+    o = c["snap_orders"].row(0, named=True)
+    assert c["snap_orders"].height == 1 and o["px"] == 9.5 and o["rx_mid"] == pytest.approx(1000.2) and o["tif"] == "Alo"
+    p = c["snap_positions"]
+    assert p.height == 1 and p["szi"].item() == -12.5 and p["position_value"].item() == 125.0       # flat position dropped, short keeps its sign
+    assert c["snap_mids"]["mid"].item() == 10.0 and c["snap_meta"]["sz_decimals"].to_list() == [2, 0]
+    assert list(c["meta"]["snapshots"]) == ["start"]                                             # failed fetch is not a snapshot
+
+
+def test_capture_without_snapshots_gives_empty_frames(tmp_path):
+    c = load_wallet_capture(write(tmp_path, [bbo_msg("X", 1.0, 99, 101)]))
+    assert c["snap_orders"].height == 0 and c["snap_positions"].columns[:2] == ["label", "rx_mid"]
