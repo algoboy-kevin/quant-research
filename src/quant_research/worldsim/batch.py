@@ -32,7 +32,8 @@ def is_batchable(arm, config: WorldConfig) -> bool:
     """True for arms known to act per market slot (see module docstring)."""
     from . import arms as _arms
     from . import reference_arms as _ref
-    ok = isinstance(arm, (_ref.Churn, _ref.Carry, _ref.FarFill, _arms.ChurnArm, _arms.CarryArm))
+    ok = isinstance(arm, (_ref.Churn, _ref.Carry, _ref.FarFill, _ref.GeometricGrid,
+                          _arms.ChurnArm, _arms.CarryArm))
     return ok and config.markets <= MAX_MARKETS
 
 

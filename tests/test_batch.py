@@ -11,7 +11,7 @@ from quant_research.worldsim.engine import Engine
 from quant_research.worldsim.fees import Fees
 from quant_research.worldsim.fills import FillConfig
 from quant_research.worldsim.parallel import run_world, run_worlds
-from quant_research.worldsim.reference_arms import Carry, Churn, FarFill, build
+from quant_research.worldsim.reference_arms import Carry, Churn, FarFill, GeometricGrid, build
 from quant_research.worldsim.worlds import World, WorldBatch
 
 PERP = dict(group="perp", perp_sigma=0.4, clusters=3, adverse_selection=0.6)
@@ -23,8 +23,8 @@ CONFIGS = {
     "pred_paired": WorldConfig(markets=6, steps=16, regime="slow", paired=True, **PRED),
     "pred_tiny": WorldConfig(markets=1, steps=4, **PRED),
 }
-ARMS = [Churn(), Carry(), FarFill(), Churn(levels=2, width_ticks=2, skew_ticks=1.5),
-        ChurnArm(width_ticks=2)]
+ARMS = [Churn(), Carry(), FarFill(), GeometricGrid(levels=3),
+        Churn(levels=2, width_ticks=2, skew_ticks=1.5), ChurnArm(width_ticks=2)]
 SEEDS = [3, 17, 123456789012345, 8, 9]
 
 

@@ -112,11 +112,127 @@ class FarFill:
         return Intent(action, price, sizes)
 
 
+@dataclass(frozen=True)
+class GeometricGrid:
+    """Geometric-ladder maker: the marbles-towhee wallet's measured construction
+    (cf. py-hftbt hftbt/strategies/geometric_grid.py).
+
+    Rung k multiplies the previous rung's price by (1 - g) on bids / (1 + g) on
+    asks, rounded OUTWARD (floor/ceil) and stepped ITERATIVELY from the previous
+    rung, at least one tick apart; the first rung that would cross the opposite
+    touch or leave (0,1) ends that side (post-only by construction). The centre
+    translates rigidly against inventory: c = mid * (1 - lambda * q / cap).
+    Requote is a per-rung relative deadband on the distance behind the own-side
+    touch: keep while |d - d_target| < max(1 tick, theta * d_target). Sides drop
+    at the inventory cap.
+
+    Deviations from the measured law (deliberate): constant size per rung (the
+    wallet uses constant-notional clip/p; constant size keeps cross-arm studies
+    comparable) and lambda scaled per full inventory cap (the wallet's is per $1M
+    notional, inert at toy notionals).
+    """
+    levels: int = 5
+    size: int = 1
+    grid_step: float = 0.004
+    theta: float = 0.25
+    skew_lambda: float = 0.002
+    inventory_limit: int = 20
+
+    def __post_init__(self):
+        for name in ("levels", "size", "inventory_limit"):
+            v = getattr(self, name)
+            if type(v) is not int or v <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        for name in ("grid_step", "theta", "skew_lambda"):
+            v = getattr(self, name)
+            if not np.isfinite(v) or v < 0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+        if self.grid_step <= 0:
+            raise ValueError("grid_step must be positive")
+
+    def decide(self, snapshot: Snapshot, /) -> Intent:
+        f = snapshot.frame
+        n, L = f.mid.shape[0], self.levels
+        tick = f.tick_size
+        q = snapshot.inventory
+        g = self.grid_step
+        prediction = f.group == "prediction"
+        centre = f.mid * (1.0 - self.skew_lambda * q / self.inventory_limit)
+        price = np.full((n, 2, L), np.nan)
+        for side, sgn in ((0, -1.0), (1, 1.0)):
+            prev = centre.copy()
+            tprev = (np.floor(centre / tick) if side == 0 else np.ceil(centre / tick)).astype(np.int64)
+            alive = (q < self.inventory_limit) if side == 0 else (q > -self.inventory_limit)
+            for k in range(L):
+                prev = prev * (1.0 + sgn * g)
+                t = (np.floor(prev / tick + 1e-9) if side == 0
+                     else np.ceil(prev / tick - 1e-9)).astype(np.int64)
+                if k:
+                    t = np.minimum(t, tprev - 1) if side == 0 else np.maximum(t, tprev + 1)
+                px = np.round(t * tick, 6)  # same grid as the engine's resting prices
+                if side == 0:
+                    ok = px < f.best_ask
+                    if prediction:
+                        ok = ok & (px > 0)
+                else:
+                    ok = px > f.best_bid
+                    if prediction:
+                        ok = ok & (px < 1)
+                ok = ok & alive
+                price[:, side, k] = np.where(ok, px, np.nan)
+                prev = np.where(ok, px, prev)
+                tprev = np.where(ok, t, tprev)
+                alive = ok
+        rest = snapshot.order_price
+        action = np.where(np.isnan(price), 2, 1).astype(np.int8)
+        for side, touch in ((0, f.best_bid), (1, f.best_ask)):
+            r = rest[:, side, :]
+            tgt = price[:, side, :]
+            d_rest = ((touch[:, None] - r) if side == 0 else (r - touch[:, None])) / tick[:, None]
+            d_tgt = ((touch[:, None] - tgt) if side == 0 else (tgt - touch[:, None])) / tick[:, None]
+            diff = np.abs(d_rest - d_tgt)
+            trip = (diff >= 1.0 - 1e-9) & (diff >= self.theta * np.abs(d_tgt) - 1e-9)
+            can_keep = np.isfinite(r) & np.isfinite(tgt) & ~trip
+            if side == 0:
+                can_keep &= r < f.best_ask[:, None]
+                if prediction:
+                    can_keep &= r > 0
+            else:
+                can_keep &= r > f.best_bid[:, None]
+                if prediction:
+                    can_keep &= r < 1
+            action[:, side, :] = np.where(np.isfinite(tgt), np.where(can_keep, 0, 1), 2)
+        # Ordering guard: kept rungs mixed with re-pegged targets can break strict
+        # best-first ordering or cross the opposite side; targets alone never do,
+        # so re-peg every kept rung on the offending market-side.
+        out_price = np.where(action == 0, rest, price)
+        bad = np.zeros(n, dtype=bool)
+        for side in (0, 1):
+            p = out_price[:, side, :]
+            for k in range(1, L):
+                a, b = p[:, k - 1], p[:, k]
+                fin = np.isfinite(a) & np.isfinite(b)
+                bad |= fin & ((a <= b) if side == 0 else (a >= b))
+        fin_b = np.isfinite(out_price[:, 0, :])
+        fin_a = np.isfinite(out_price[:, 1, :])
+        if fin_b.any() and fin_a.any():
+            worst_bid = np.where(fin_b, out_price[:, 0, :], -np.inf).max(axis=1)
+            best_ask = np.where(fin_a, out_price[:, 1, :], np.inf).min(axis=1)
+            bad |= worst_bid >= best_ask
+        re = bad[:, None, None] & (action == 0)
+        action[re] = 1
+        out_price = np.where(action == 0, rest, price)
+        sizes = np.full((n, 2, L), self.size, dtype=np.int64)
+        return Intent(action, out_price, sizes)
+
+
 _MODULES = {
     "churn": (Churn, dict(levels=1, size=1, width_ticks=1, inventory_limit=12, skew_ticks=0.25)),
     "carry": (Carry, dict(levels=1, size=1, width_ticks=4, inventory_limit=8, stop_ms=1000)),
     "far_fill": (FarFill, dict(levels=1, size=1, width_ticks=8, reanchor_ticks=10,
                                inventory_limit=20)),
+    "geometric_grid": (GeometricGrid, dict(levels=5, size=1, grid_step=0.004, theta=0.25,
+                                           skew_lambda=0.002, inventory_limit=20)),
 }
 
 
