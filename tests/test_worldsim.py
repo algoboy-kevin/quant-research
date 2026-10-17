@@ -87,8 +87,9 @@ def test_belief_is_conditional_martingale_and_stays_bounded():
 
 def test_factors_change_correlation():
     def increments(common, cluster):
+        # latent-only view: the OU dislocation is an independent per-market display term
         c = WorldConfig(markets=50, steps=120, common_weight=common,
-                        cluster_weight=cluster, clusters=1)
+                        cluster_weight=cluster, clusters=1, dislocation_sd_ticks=0, tick=0.001)
         return np.diff(np.stack([f.mid for f in World(c, 8)]), axis=0)
     independent = np.corrcoef(increments(0, 0).T)
     clustered = np.corrcoef(increments(.3, .6).T)
@@ -380,7 +381,8 @@ def test_negative_perp_price_and_overflow_are_explicit():
 def test_adverse_selection_couples_flow_to_next_move():
     def sign_alignment(adverse):
         cfg = WorldConfig(markets=200, steps=40, common_weight=0, cluster_weight=0,
-                          adverse_selection=adverse, perp_sigma=.1, trade_probability=1)
+                          adverse_selection=adverse, perp_sigma=.1, trade_probability=1,
+                          informed_strength=1.0, dislocation_sd_ticks=0)
         frames = list(World(cfg, 11))
         direction = np.stack([f.aggressor for f in frames[1:-1]])
         moves = np.diff(np.stack([f.mid for f in frames[1:]]), axis=0)

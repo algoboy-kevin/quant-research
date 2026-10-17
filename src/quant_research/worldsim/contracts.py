@@ -27,7 +27,8 @@ class WorldConfig:
     steps: int = 240
     dt_ms: int = 250
     depth: int = 3
-    tick: float = 0.001
+    # None -> 1 bp-ish grid per group: perp 0.01 (1 bp on value 100), prediction 0.001.
+    tick: float | None = None
     common_weight: float = 0.05
     cluster_weight: float = 0.15
     clusters: int = 10
@@ -36,10 +37,33 @@ class WorldConfig:
     perp_sigma: float = 0.003
     trade_probability: float = 0.6
     paired: bool = False
+    # --- display layer (fill-model upgrade; never touches the latent fair process) ---
+    # Book spread per market per frame ~ NegBin(mean, dispersion k): var = mean + mean^2/k,
+    # in ticks. Touch = displayed centre -/+ ceil(spread/2) ticks (outward rounding), so the
+    # realised book spread is an even number >= 2 ticks.
+    spread_mean_ticks: float = 12.0
+    spread_dispersion: float = 4.0
+    # Displayed centre = latent fair value + eta, eta ~ stationary OU(0, sd) in ticks.
+    dislocation_sd_ticks: float = 8.0
+    dislocation_halflife_ms: float = 300_000.0
+    # Aggressive print = aggressor-side touch + w ticks. w = penetration (0..depth+1) with
+    # prob 1-wick_prob, else a wick: depth+2 + ceil(Exp(wick_scale_ticks)), capped at
+    # wick_max_ticks.
+    wick_prob: float = 0.08
+    wick_scale_ticks: float = 12.0
+    wick_max_ticks: int = 40
+    # Toxicity: a print is INFORMED (aggressor = sign of the NEXT latent move) with
+    # probability min(1, adverse_selection * informed_strength * m), m = 1 for ordinary
+    # prints and wick_toxicity_mult for wicks. Studies set adverse_selection per setup
+    # (calm/tense); informed_strength is the calibrated global scale (1.0 = legacy coupling).
+    informed_strength: float = 0.16
+    wick_toxicity_mult: float = 20.0
 
     def __post_init__(self):
         if self.group not in ("perp", "prediction") or self.regime not in ("slow", "fast"):
             raise ValueError("unknown group/regime")
+        if self.tick is None:
+            object.__setattr__(self, "tick", 0.01 if self.group == "perp" else 0.001)
         if any(type(x) is not int or x <= 0 for x in
                (self.markets, self.steps, self.dt_ms, self.depth, self.clusters)):
             raise ValueError("dimensions and clock must be positive integers")
@@ -60,6 +84,22 @@ class WorldConfig:
             raise ValueError("factor weights must sum to <=1")
         if not 0 <= self.adverse_selection <= 1 or not 0 <= self.trade_probability <= 1:
             raise ValueError("probabilities outside [0,1]")
+        disp = (self.spread_mean_ticks, self.spread_dispersion, self.dislocation_sd_ticks,
+                self.dislocation_halflife_ms, self.wick_prob, self.wick_scale_ticks,
+                self.informed_strength, self.wick_toxicity_mult)
+        if not all(np.isfinite(x) for x in disp):
+            raise ValueError("finite display configuration required")
+        if (self.spread_mean_ticks <= 0 or self.spread_dispersion <= 0
+                or self.dislocation_halflife_ms <= 0 or self.wick_scale_ticks <= 0):
+            raise ValueError("spread mean/dispersion, halflife and wick scale must be positive")
+        if self.dislocation_sd_ticks < 0:
+            raise ValueError("negative dislocation sd")
+        if not 0 <= self.wick_prob <= 1 or not 0 <= self.informed_strength <= 1:
+            raise ValueError("probabilities outside [0,1]")
+        if self.wick_toxicity_mult < 0:
+            raise ValueError("negative wick_toxicity_mult")
+        if type(self.wick_max_ticks) is not int or self.wick_max_ticks < 1:
+            raise ValueError("wick_max_ticks must be a positive integer")
         if self.paired and (self.group != "prediction" or self.markets % 2):
             raise ValueError("paired mode requires even prediction markets")
 

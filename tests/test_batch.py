@@ -22,6 +22,16 @@ CONFIGS = {
     "pred_fast": WorldConfig(markets=6, steps=16, regime="fast", **PRED),
     "pred_paired": WorldConfig(markets=6, steps=16, regime="slow", paired=True, **PRED),
     "pred_tiny": WorldConfig(markets=1, steps=4, **PRED),
+    # non-default display-layer knobs (spread / OU dislocation / wicks / toxicity)
+    "perp_display": WorldConfig(markets=5, steps=20, dt_ms=60_000, spread_mean_ticks=3.0,
+                                spread_dispersion=0.5, dislocation_sd_ticks=20.0,
+                                dislocation_halflife_ms=90_000.0, wick_prob=0.5,
+                                wick_scale_ticks=3.0, wick_max_ticks=7, informed_strength=1.0,
+                                wick_toxicity_mult=0.0, **PERP),
+    "pred_paired_display": WorldConfig(markets=6, steps=16, regime="fast", paired=True,
+                                       tick=0.01, spread_mean_ticks=8.0, dislocation_sd_ticks=4.0,
+                                       wick_prob=0.4, wick_max_ticks=30, informed_strength=0.7,
+                                       **PRED),
 }
 ARMS = [Churn(), Carry(), FarFill(), GeometricGrid(levels=3),
         Churn(levels=2, width_ticks=2, skew_ticks=1.5), ChurnArm(width_ticks=2)]
