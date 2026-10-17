@@ -25,7 +25,14 @@ def quotes(s, levels, size, width, skew):
     price = np.stack((bid, ask), axis=1)
     action = np.ones(price.shape, dtype=np.int8)
     if f.group == "prediction":
-        action[(price <= 0) | (price >= 1)] = 2
+        # The engine rounds quotes OUTWARD to the tick (bid down, ask up) and then
+        # enforces strict (0,1) bounds; mask on the ROUNDED price, or a pre-round
+        # price in (0, tick) floors to 0 and gets rejected at submit.
+        ticks = f.tick_size[:, None]  # (n, 1) -> broadcast over levels
+        rounded_bid = np.floor(price[:, 0] / ticks + 1e-9) * ticks
+        rounded_ask = np.ceil(price[:, 1] / ticks - 1e-9) * ticks
+        action[:, 0][rounded_bid <= 0] = 2
+        action[:, 1][rounded_ask >= 1] = 2
     sizes = np.full(price.shape, size, dtype=np.int64)
     return action, price, sizes
 
