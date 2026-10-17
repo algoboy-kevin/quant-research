@@ -10,7 +10,7 @@ LIMIT = 2**52
 
 def money(price):
     a = np.asarray(price)
-    if np.any(~np.isfinite(a)) or np.any(np.abs(a) > LIMIT / 1e9):
+    if (~np.isfinite(a)).any() or (np.abs(a) > LIMIT / 1e9).any():
         raise OverflowError("price outside exact accounting bounds")
     return np.rint(a * 1e6).astype(np.int64) * 1000
 
@@ -64,13 +64,13 @@ class Ledger:
         q = self.inventory
         qty = np.abs(dq)
         # Conservative bounds also protect the integer proportional allocation.
-        if (np.any(qty > 1_000_000) or np.any(np.abs(q) + qty > 1_000_000)
-                or np.any(np.abs(p.astype(float)) * qty > LIMIT)
-                or np.any(np.abs(self.basis.astype(float)) * np.maximum(qty, 1) > LIMIT)):
+        if ((qty > 1_000_000).any() or (np.abs(q) + qty > 1_000_000).any()
+                or (np.abs(p.astype(float)) * qty > LIMIT).any()
+                or (np.abs(self.basis.astype(float)) * np.maximum(qty, 1) > LIMIT).any()):
             raise OverflowError("ledger precision bound exceeded")
         fee = np.zeros_like(q) if fee is None else np.asarray(fee, dtype=np.int64)
         rebate = np.zeros_like(q) if rebate is None else np.asarray(rebate, dtype=np.int64)
-        if np.any(fee < 0) or np.any(rebate < 0):
+        if (fee < 0).any() or (rebate < 0).any():
             raise ValueError("fee/rebate must be nonnegative")
         closing = np.where(q * dq < 0, np.minimum(np.abs(q), qty), 0)
         cost = round_ratio(self.basis * closing, np.abs(q))
@@ -80,7 +80,7 @@ class Ledger:
         opening = qty - closing
         new_basis = self.basis - cost + opening * p
         new_cash = self.cash - dq * p - fee + rebate
-        if any(np.any(np.abs(a) > LIMIT) for a in
+        if any((np.abs(a) > LIMIT).any() for a in
                (new_cash, new_basis, self.gross + pnl,
                 self.fees_paid + fee, self.rebates_received + rebate)):
             raise OverflowError("ledger balance precision bound exceeded")
@@ -93,10 +93,10 @@ class Ledger:
 
     def equity(self, mid):
         p = money(mid)
-        if np.any(np.abs(p.astype(float)) * np.abs(self.inventory) > LIMIT):
+        if (np.abs(p.astype(float)) * np.abs(self.inventory) > LIMIT).any():
             raise OverflowError("mark precision bound exceeded")
         result = self.cash + self.inventory * p
-        if np.any(np.abs(result) > LIMIT):
+        if (np.abs(result) > LIMIT).any():
             raise OverflowError("equity precision bound exceeded")
         return result
 
@@ -104,7 +104,7 @@ class Ledger:
         if self.finalized:
             raise ValueError("ledger already finalized")
         p = money(mark)
-        if settle and np.any((p != 0) & (p != 1_000_000_000)):
+        if settle and ((p != 0) & (p != 1_000_000_000)).any():
             raise ValueError("settlement must be binary")
         final = self.equity(mark)
         qty = np.abs(self.inventory)

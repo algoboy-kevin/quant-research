@@ -20,9 +20,14 @@ class FillConfig:
 
 
 class Orders:
-    def __init__(self, markets, levels, config=FillConfig()):
+    def __init__(self, markets, levels, config=FillConfig(), worlds=1):
+        """`markets` slots in total; with worlds=K > 1 they are K stacked equal worlds
+        (world-major), used only to attribute rejections per world."""
         if type(levels) is not int or levels < 1:
             raise ValueError("positive integer levels required")
+        if type(worlds) is not int or worlds < 1 or markets % worlds:
+            raise ValueError("worlds must be a positive int dividing markets")
+        self.worlds = worlds
         self.config = config
         shape = (markets, 2, levels)
         self.price = np.full(shape, np.nan)
@@ -33,7 +38,11 @@ class Orders:
         self.queue = np.zeros(shape, dtype=np.int64)
         self.replace_price = np.full(shape, np.nan)
         self.replace_size = np.zeros(shape, dtype=np.int64)
-        self.rejections = 0
+        self.rejections_by_world = np.zeros(worlds, dtype=np.int64)
+
+    @property
+    def rejections(self) -> int:
+        return int(self.rejections_by_world.sum())
 
     def clear(self, mask):
         self.status[mask] = 0
@@ -61,7 +70,9 @@ class Orders:
             self.blocked[:, side] |= pending & crossed
         activate = (self.status == 1) & (self.due <= t)
         reject = activate & self.blocked
-        self.rejections += int(np.count_nonzero(reject))
+        if reject.any():
+            self.rejections_by_world += np.count_nonzero(
+                reject.reshape(self.worlds, -1), axis=1)
         self.clear(reject)
         activate &= ~reject
         for side in range(2):
@@ -69,7 +80,7 @@ class Orders:
             depth_size = frame.bid_size if side == 0 else frame.ask_size
             for level in range(self.price.shape[2]):
                 mask = activate[:, side, level]
-                if not np.any(mask):
+                if not (mask).any():
                     continue
                 p = self.price[:, side, level]
                 better = depth_price >= p[:, None] if side == 0 else depth_price <= p[:, None]
@@ -82,18 +93,18 @@ class Orders:
         for a in (intent.action, intent.price, intent.size):
             if np.shape(a) != shape:
                 raise ValueError("intent arrays must have shape [N,2,L]")
-        if not np.issubdtype(intent.action.dtype, np.integer) or np.any(
-                (intent.action < 0) | (intent.action > 2)):
+        if not np.issubdtype(intent.action.dtype, np.integer) or (
+                (intent.action < 0) | (intent.action > 2)).any():
             raise ValueError("invalid intent action")
         post = intent.action == 1
         if (not np.issubdtype(intent.size.dtype, np.integer)
-                or np.any(post & ((intent.size <= 0) | (intent.size > 1_000_000)))):
+                or (post & ((intent.size <= 0) | (intent.size > 1_000_000))).any()):
             raise ValueError("post sizes must be positive integer contracts <=1e6")
         price = np.array(intent.price, dtype=float, copy=True)
-        if np.any(post & ~np.isfinite(price)):
+        if (post & ~np.isfinite(price)).any():
             raise ValueError("nonfinite quote")
         if intent.price_mode == "offset":
-            if np.any(post & ((price < 0) | (price != np.floor(price)))):
+            if (post & ((price < 0) | (price != np.floor(price)))).any():
                 raise ValueError("offset must be nonnegative integer ticks")
             price = frame.mid[:, None, None] + price * frame.tick_size[:, None, None] * np.array([-1, 1])[None, :, None]
         elif intent.price_mode != "absolute":
@@ -102,7 +113,7 @@ class Orders:
         price[:, 0] = np.floor(price[:, 0] / ticks + 1e-9) * ticks
         price[:, 1] = np.ceil(price[:, 1] / ticks - 1e-9) * ticks
         price = np.round(price, 6)
-        if frame.group == "prediction" and np.any(post & ((price <= 0) | (price >= 1))):
+        if frame.group == "prediction" and (post & ((price <= 0) | (price >= 1))).any():
             raise ValueError("prediction quote outside (0,1)")
         # Validate the requested ladder, excluding cancelled/absent slots.
         candidate = np.where(post, price, self.price)
@@ -112,11 +123,11 @@ class Orders:
                 for right in range(left + 1, shape[2]):
                     bad = (candidate[:, side, left] <= candidate[:, side, right] if side == 0
                            else candidate[:, side, left] >= candidate[:, side, right])
-                    if np.any(bad):
+                    if (bad).any():
                         raise ValueError("ladder must be distinct and best first")
         for bid in range(shape[2]):
             for ask in range(shape[2]):
-                if np.any(candidate[:, 0, bid] >= candidate[:, 1, ask]):
+                if (candidate[:, 0, bid] >= candidate[:, 1, ask]).any():
                     raise ValueError("own ladder crosses")
         cancel = intent.action == 2
         self.clear(cancel & (self.status == 1))
@@ -158,7 +169,7 @@ class Orders:
                 qty = np.where(ok, np.minimum(available, self.size[rows, side, level]), 0)
                 available -= qty
                 self.size[rows, side, level] -= qty
-                if np.any(qty):
+                if (qty).any():
                     price = np.where(qty > 0, self.price[rows, side, level], 0.0)
                     yield qty if side == 0 else -qty, price
             self.queue[:, side] = np.where(eligible,

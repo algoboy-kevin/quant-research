@@ -18,7 +18,7 @@ class Fees:
         q = np.abs(np.asarray(size, dtype=np.int64))
         rate = self.maker_rate if maker else self.taker_rate
         if group == "prediction":
-            if np.any((p < 0) | (p > 1_000_000)):
+            if ((p < 0) | (p > 1_000_000)).any():
                 raise ValueError("prediction price outside [0,1]")
             base = (p * (1_000_000 - p)).astype(float) / 1000
         elif group == "perp":
@@ -26,6 +26,6 @@ class Fees:
         else:
             raise ValueError("unknown group")
         raw = q * base * rate
-        if np.any(~np.isfinite(raw)) or np.any(raw > 2**52):
+        if (~np.isfinite(raw)).any() or (raw > 2**52).any():
             raise OverflowError("fee precision bound exceeded")
         return np.rint(raw).astype(np.int64)
