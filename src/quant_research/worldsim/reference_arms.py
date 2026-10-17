@@ -125,17 +125,27 @@ def available() -> list[str]:
 
 
 def parse_spec(spec: str) -> tuple[str, dict]:
-    """'churn.width_ticks=2' -> ('churn', {'width_ticks': 2})."""
+    """'churn.width_ticks=2.skew_ticks=0.25' -> ('churn', {'width_ticks': 2, 'skew_ticks': .25}).
+
+    '.' separates params, but float values contain '.' too: split fragments
+    without '=' are rejoined into the preceding value.
+    """
     name, _, raw = spec.partition(".")
-    params = {}
-    for kv in raw.split(".") if raw else []:
-        key, sep, value = kv.partition("=")
-        if not sep:
-            raise ValueError(f"bad param override '{kv}' in arm spec '{spec}' (want key=value)")
-        try:
-            params[key] = literal_eval(value)
-        except (ValueError, SyntaxError):
+    params: dict[str, str] = {}
+    key = None
+    for part in raw.split(".") if raw else []:
+        if "=" in part:
+            key, _, value = part.partition("=")
             params[key] = value
+        elif key is not None:
+            params[key] += "." + part
+        else:
+            raise ValueError(f"bad param override '{part}' in arm spec '{spec}' (want key=value)")
+    for k, v in list(params.items()):
+        try:
+            params[k] = literal_eval(v)
+        except (ValueError, SyntaxError):
+            params[k] = v
     return name, params
 
 

@@ -30,6 +30,13 @@ class RegistryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_spec("churn.width_ticks")
 
+    def test_float_override_roundtrips(self):
+        name, params = parse_spec("churn.skew_ticks=0.25.width_ticks=2")
+        self.assertEqual(name, "churn")
+        self.assertEqual(params, {"skew_ticks": 0.25, "width_ticks": 2})
+        _, _, arm = build("churn.skew_ticks=0.25")
+        self.assertEqual(arm.skew_ticks, 0.25)
+
     def test_build_many_all(self):
         arms = build_many(None)
         self.assertEqual(set(arms), {"carry", "churn", "far_fill"})
