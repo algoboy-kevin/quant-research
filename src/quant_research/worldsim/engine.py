@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .contracts import Arm, Collect, Snapshot
+from .contracts import Arm, Collect, Snapshot, arm_view
 from .fees import Fees
 from .fills import FillConfig, Orders
 from .ledger import Ledger
@@ -46,10 +46,14 @@ class Engine:
             last_fill_mid[changed] = frame.mid[changed]
             count += int(np.count_nonzero(changed))
             if self.collect & Collect.FILLS:
+                info = orders.event_info if maker else None
                 for i in np.flatnonzero(changed):
-                    fills.append(dict(market=int(i), ts_ms=frame.ts_ms,
-                                      signed_size=int(dq[i]), price=float(price[i]),
-                                      maker=maker, charge_nano=int(charge[i])))
+                    rec = dict(market=int(i), ts_ms=frame.ts_ms,
+                               signed_size=int(dq[i]), price=float(price[i]),
+                               maker=maker, charge_nano=int(charge[i]))
+                    if info is not None:     # flow worlds: where inside the bar the print hit
+                        rec.update(frac=float(info[0][i]), print_mid=float(info[1][i]))
+                    fills.append(rec)
 
         def observe(frame):
             nonlocal peak, drawdown
@@ -75,7 +79,7 @@ class Engine:
             orders.advance(frame)
             for dq, price in orders.fills(frame):
                 book_fill(frame, dq, price, True)
-            snap = Snapshot(frame, ledger.inventory, ledger.cash, orders.price, orders.size,
+            snap = Snapshot(arm_view(frame), ledger.inventory, ledger.cash, orders.price, orders.size,
                             orders.status, last_fill_mid,
                             None if frame.settlement_ms is None else frame.settlement_ms - frame.ts_ms)
             intent = arm.decide(snap)

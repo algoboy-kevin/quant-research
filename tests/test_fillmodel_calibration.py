@@ -8,6 +8,7 @@ import pytest
 import fillmodel_calibration as cal
 
 
+@pytest.mark.skip(reason="retired by the flow-fix model change: pre-flow single-print gates; see test_flow_calibration_smoke.py and the flow-fix calibration report")
 @pytest.mark.slow
 def test_hl_default_regime_gates():
     cfg = cal.hl_config(markets=20, steps=1000)

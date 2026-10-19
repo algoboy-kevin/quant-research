@@ -19,7 +19,7 @@ from dataclasses import dataclass, fields
 
 import numpy as np
 
-from .contracts import Collect, Frame, Intent, Snapshot, WorldConfig
+from .contracts import Collect, FlowEvents, Frame, Intent, Snapshot, WorldConfig, arm_view
 from .fees import Fees
 from .fills import FillConfig, Orders
 from .ledger import Ledger
@@ -76,7 +76,8 @@ class _Stack:
 def _tile(frame, A):
     if A == 1:
         return frame
-    return Frame(**{f.name: (np.concatenate((v,) * A) if isinstance(v, np.ndarray) else v)
+    return Frame(**{f.name: (np.concatenate((v,) * A) if isinstance(v, np.ndarray)
+                            else v.tiled(A) if isinstance(v, FlowEvents) else v)
                     for f in fields(frame) for v in (getattr(frame, f.name),)})
 
 
@@ -144,10 +145,10 @@ def run_batch(config: WorldConfig, seeds, arms, *, fill_config=FillConfig(), fee
             for a, arm in enumerate(st.arms):
                 lo, hi = a * span, (a + 1) * span
                 if st.A == 1:
-                    snap = Snapshot(frame, ledger.inventory, ledger.cash, orders.price,
+                    snap = Snapshot(arm_view(frame), ledger.inventory, ledger.cash, orders.price,
                                     orders.size, orders.status, st.last_fill_mid, tts)
                 else:
-                    snap = Snapshot(frame, ledger.inventory[lo:hi], ledger.cash[lo:hi],
+                    snap = Snapshot(arm_view(frame), ledger.inventory[lo:hi], ledger.cash[lo:hi],
                                     orders.price[lo:hi], orders.size[lo:hi],
                                     orders.status[lo:hi], st.last_fill_mid[lo:hi], tts)
                 intents.append(arm.decide(snap))

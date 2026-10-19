@@ -15,6 +15,9 @@ from quant_research.worldsim.portfolio import breadth, run_portfolio, statistics
 from quant_research.worldsim.worlds import belief_step
 
 
+NOQ = FillConfig(queue_fraction=0.0)    # hand-built frames pin absolute priority (legacy mechanics)
+
+
 def frame(ts=0, bid=.49, ask=.51, trade=.49, qty=0, aggressor=-1):
     base = next(iter(World(WorldConfig(group="prediction", markets=1, steps=20), 1)))
     return replace(base, ts_ms=ts, mid=np.array([(bid + ask) / 2]),
@@ -48,6 +51,12 @@ def test_world_and_engine_determinism(group):
             if isinstance(x, np.ndarray):
                 assert x.tobytes() == y.tobytes()
                 assert not x.flags.writeable
+            elif name == "flow":
+                assert (x is None) == (y is None)
+                if x is not None:
+                    for g in x.__dataclass_fields__:
+                        u, v = getattr(x, g), getattr(y, g)
+                        assert (u.tobytes() == v.tobytes()) if isinstance(u, np.ndarray) else u == v
             else:
                 assert x == y
     a = Engine(collect=Collect.ALL).run(World(cfg, 7), ChurnArm())
@@ -88,7 +97,7 @@ def test_belief_is_conditional_martingale_and_stays_bounded():
 def test_factors_change_correlation():
     def increments(common, cluster):
         # latent-only view: the OU dislocation is an independent per-market display term
-        c = WorldConfig(markets=50, steps=120, common_weight=common,
+        c = WorldConfig(markets=50, steps=120, common_weight=common, print_rate_per_hour=0.0,
                         cluster_weight=cluster, clusters=1, dislocation_sd_ticks=0, tick=0.001)
         return np.diff(np.stack([f.mid for f in World(c, 8)]), axis=0)
     independent = np.corrcoef(increments(0, 0).T)
@@ -99,7 +108,7 @@ def test_factors_change_correlation():
 
 
 def test_crossing_and_price_priority_conserve_print_volume():
-    orders = Orders(1, 2)
+    orders = Orders(1, 2, NOQ)
     orders.submit(frame(), intent((.49, .48), size=2))
     assert not list(orders.fills(frame(250, trade=.495, qty=9)))
     fills = list(orders.fills(frame(500, trade=.47, qty=3)))
@@ -108,14 +117,14 @@ def test_crossing_and_price_priority_conserve_print_volume():
 
 
 def test_ask_crossing_only_on_buy():
-    orders = Orders(1, 1)
+    orders = Orders(1, 1, NOQ)
     orders.submit(frame(), intent((.49,), (.51,), size=2))
     fills = list(orders.fills(frame(250, trade=.52, qty=1, aggressor=1)))
     assert len(fills) == 1 and fills[0][0][0] == -1 and fills[0][1][0] == .51
 
 
 def test_queue_pessimism_and_shared_depth():
-    front, back = Orders(1, 2), Orders(1, 2, FillConfig(queue_fraction=1))
+    front, back = Orders(1, 2, NOQ), Orders(1, 2, FillConfig(queue_fraction=1))
     for o in (front, back):
         o.submit(frame(), intent((.49, .489), size=1))
     f = frame(250, trade=.489, qty=4)
@@ -128,7 +137,7 @@ def test_queue_pessimism_and_shared_depth():
 
 
 def test_activation_rejects_cross_and_recover_in_flight():
-    orders = Orders(1, 1, FillConfig(post_ms=500))
+    orders = Orders(1, 1, FillConfig(post_ms=500, queue_fraction=0))
     orders.submit(frame(), intent())
     f = frame(250, bid=.47, ask=.48, trade=.48, qty=5)
     orders.advance(f)
@@ -138,7 +147,7 @@ def test_activation_rejects_cross_and_recover_in_flight():
 
 
 def test_activation_tie_and_cancel_tie():
-    orders = Orders(1, 1, FillConfig(post_ms=250, cancel_ms=250))
+    orders = Orders(1, 1, FillConfig(post_ms=250, cancel_ms=250, queue_fraction=0))
     orders.submit(frame(), intent(size=3))
     f = frame(250, qty=1)
     orders.advance(f)
@@ -151,7 +160,7 @@ def test_activation_tie_and_cancel_tie():
 
 
 def test_replacement_waits_cancel_then_post():
-    orders = Orders(1, 1, FillConfig(post_ms=250, cancel_ms=250))
+    orders = Orders(1, 1, FillConfig(post_ms=250, cancel_ms=250, queue_fraction=0))
     orders.submit(frame(), intent(size=3))
     orders.advance(frame(250))
     orders.submit(frame(250), intent((.48,), size=2))
@@ -164,16 +173,16 @@ def test_replacement_waits_cancel_then_post():
 
 
 def test_offset_ticks_and_invalid_intents():
-    orders = Orders(1, 1)
+    orders = Orders(1, 1, NOQ)
     a = intent((2,))
     orders.submit(frame(), replace(a, price_mode="offset"))
     assert orders.price[0, 0, 0] == .498
     with pytest.raises(ValueError):
         orders.submit(frame(), intent((float("nan"),)))
     with pytest.raises(ValueError):
-        Orders(1, 2).submit(frame(), intent((.48, .49)))
+        Orders(1, 2, NOQ).submit(frame(), intent((.48, .49)))
     with pytest.raises(ValueError):
-        Orders(1, 1).submit(frame(), intent((.52,), (.51,)))
+        Orders(1, 1, NOQ).submit(frame(), intent((.52,), (.51,)))
 
 
 def test_fee_symmetry_exact_and_native_formula():
@@ -191,7 +200,7 @@ def test_maker_pays_direction_and_ledger_identity():
     from quant_research.worldsim.worlds import World
 
     _, _, arm = build("churn")
-    cfg = WorldConfig(group="perp", markets=8, steps=60)
+    cfg = WorldConfig(group="perp", markets=8, steps=60, print_rate_per_hour=0.0)
     out = {}
     for maker_pays in (False, True):
         res = Engine(fees=Fees(maker_rate=0.00015, taker_rate=0.00045, maker_pays=maker_pays),
@@ -368,23 +377,23 @@ def test_no_same_frame_fill_and_last_fill_reference():
             assert snapshot.last_fill_mid[0] == .5
             return intent(action=0)
 
-    result = Engine(collect=Collect.ALL).run(Tape(), PostOnce())
+    result = Engine(NOQ, collect=Collect.ALL).run(Tape(), PostOnce())
     assert len(result.fills) == 1 and result.fills[0]['ts_ms'] == 250
 
 
 def test_cancel_inflight_and_zero_latency_rejection():
-    orders = Orders(1, 1, FillConfig(post_ms=500))
+    orders = Orders(1, 1, FillConfig(post_ms=500, queue_fraction=0))
     orders.submit(frame(), intent())
     orders.submit(frame(250), intent(action=2))
     orders.advance(frame(500, qty=10))
     assert not orders.status.any() and not list(orders.fills(frame(500, qty=10)))
-    immediate = Orders(1, 1)
+    immediate = Orders(1, 1, NOQ)
     immediate.submit(frame(), intent((.51,)))
     assert immediate.rejections == 1 and not immediate.status.any()
 
 
 def test_empty_cancel_pending_does_not_steal_deeper_volume():
-    orders = Orders(1, 2, FillConfig(cancel_ms=500))
+    orders = Orders(1, 2, FillConfig(cancel_ms=500, queue_fraction=0))
     orders.submit(frame(), intent((.49, .489), size=1))
     orders.submit(frame(250), intent((.49, .489), action=2))
     first = list(orders.fills(frame(300, trade=.49, qty=1)))
@@ -406,7 +415,7 @@ def test_adverse_selection_couples_flow_to_next_move():
     def sign_alignment(adverse):
         cfg = WorldConfig(markets=200, steps=40, common_weight=0, cluster_weight=0,
                           adverse_selection=adverse, perp_sigma=.1, trade_probability=1,
-                          informed_strength=1.0, dislocation_sd_ticks=0)
+                          informed_strength=1.0, dislocation_sd_ticks=0, print_rate_per_hour=0.0)
         frames = list(World(cfg, 11))
         direction = np.stack([f.aggressor for f in frames[1:-1]])
         moves = np.diff(np.stack([f.mid for f in frames[1:]]), axis=0)
@@ -432,7 +441,8 @@ def test_settlement_frequency_and_slow_fast_information():
 @pytest.mark.parametrize('group', ['perp', 'prediction'])
 @pytest.mark.parametrize('arm', [ChurnArm(levels=3), CarryArm(levels=3)])
 def test_multilevel_arms_with_latency_and_queue(group, arm):
-    cfg = WorldConfig(group=group, markets=12, steps=30, regime='slow')
+    cfg = WorldConfig(group=group, markets=12, steps=30, regime='slow',
+                      print_rate_per_hour=36_000.0)    # ~2.5 prints per 250 ms frame
     result = Engine(FillConfig(post_ms=300, cancel_ms=300, queue_fraction=.5),
                     collect=Collect.FILLS).run(World(cfg, 9), arm)
     assert np.array_equal(result.ledger.gross,

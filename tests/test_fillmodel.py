@@ -27,7 +27,8 @@ def test_negbin_spread_moments():
 
 
 def test_displayed_spread_is_even_ticks_overdispersed_and_ordered():
-    cfg = WorldConfig(group="perp", markets=200, steps=60)
+    cfg = WorldConfig(group="perp", markets=200, steps=60, spread_mean_ticks=12.0, spread_dispersion=4.0,
+                      print_rate_per_hour=0.0)
     spreads, wide = [], 0
     for f in _frames(cfg):
         ticks = np.rint((f.best_ask - f.best_bid) / f.tick_size).astype(int)
@@ -46,7 +47,7 @@ def test_eta_ou_autocorrelation_and_sd():
     halflife, dt = 600_000.0, 300_000
     cfg = WorldConfig(group="perp", markets=500, steps=80, dt_ms=dt, perp_sigma=0.0,
                       tick=0.001, dislocation_sd_ticks=50.0, dislocation_halflife_ms=halflife,
-                      common_weight=0, cluster_weight=0)
+                      common_weight=0, cluster_weight=0, print_rate_per_hour=0.0)
     eta = np.stack([f.mid for f in World(cfg, 5)]) - 100.0          # latent value is constant
     eta /= 0.001
     assert abs(eta.std() - 50.0) < 1.5                              # stationary sd

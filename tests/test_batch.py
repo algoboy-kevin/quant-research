@@ -6,7 +6,7 @@ import numpy as np
 
 from quant_research.worldsim.arms import ChurnArm
 from quant_research.worldsim.batch import run_batch
-from quant_research.worldsim.contracts import Collect, WorldConfig
+from quant_research.worldsim.contracts import Collect, FlowEvents, WorldConfig
 from quant_research.worldsim.engine import Engine
 from quant_research.worldsim.fees import Fees
 from quant_research.worldsim.fills import FillConfig
@@ -28,6 +28,16 @@ CONFIGS = {
                                 dislocation_halflife_ms=90_000.0, wick_prob=0.5,
                                 wick_scale_ticks=3.0, wick_max_ticks=7, informed_strength=1.0,
                                 wick_toxicity_mult=0.0, **PERP),
+    # flow-fix: busy multi-print bars, n>1 markets, both groups, paired mirror
+    "perp_flow_busy": WorldConfig(markets=8, steps=20, dt_ms=300_000, print_rate_per_hour=600.0,
+                                  clip_median=3.0, sweep_rate_per_hour=300.0, sweep_trade_frac=0.5,
+                                  **PERP),
+    "perp_flow_5s": WorldConfig(markets=6, steps=60, dt_ms=5_000, print_rate_per_hour=2_000.0,
+                                sweep_rate_per_hour=1_000.0, sweep_trade_frac=0.5, **PERP),
+    "pred_flow_busy": WorldConfig(markets=6, steps=16, regime="fast", print_rate_per_hour=40_000.0,
+                                  **PRED),
+    "pred_paired_flow": WorldConfig(markets=6, steps=16, regime="slow", paired=True,
+                                    print_rate_per_hour=40_000.0, **PRED),
     "pred_paired_display": WorldConfig(markets=6, steps=16, regime="fast", paired=True,
                                        tick=0.01, spread_mean_ticks=8.0, dislocation_sd_ticks=4.0,
                                        wick_prob=0.4, wick_max_ticks=30, informed_strength=0.7,
@@ -51,6 +61,19 @@ class FrameTests(unittest.TestCase):
                             b = b[k * n:(k + 1) * n]
                             self.assertEqual((name, t, k, f.name, a.dtype, a.tobytes()),
                                              (name, t, k, f.name, b.dtype, b.tobytes()))
+                        elif isinstance(a, FlowEvents) or isinstance(b, FlowEvents):
+                            self.assertTrue(a is not None and b is not None, (name, t, k))
+                            E = a.size.shape[0]
+                            for g in dataclasses.fields(a):
+                                x, y = getattr(a, g.name), getattr(b, g.name)
+                                if isinstance(x, np.ndarray):
+                                    y = y[k * n:(k + 1) * n] if x.ndim == 1 else y[:E, k * n:(k + 1) * n]
+                                    self.assertEqual((name, t, k, g.name, x.dtype, x.tobytes()),
+                                                     (name, t, k, g.name, y.dtype, y.tobytes()))
+                                else:
+                                    self.assertEqual(x, y)
+                            # rows beyond the solo world's own maximum are padding
+                            self.assertFalse(getattr(bf.flow, "size")[E:, k * n:(k + 1) * n].any())
                         else:
                             self.assertEqual(a, b)
 
