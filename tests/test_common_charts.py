@@ -57,6 +57,30 @@ class ChartTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 charts.market_samples(pl.DataFrame({"x": [1]}), Path(d) / "s.png")
 
+    def test_combined_panels(self):
+        # single arm; samples cover only setup "a" -> "b" renders an empty cell
+        equity = self._equity().filter(pl.col("arm") == "churn")
+        with tempfile.TemporaryDirectory() as d:
+            out = charts.combined_panels(equity, self._breadth(), self._samples(),
+                                         Path(d) / "c.png",
+                                         anchors={"a": [(5, 0.75), (10, 0.9)]},
+                                         title_prefix="generated")
+            self.assertTrue(out.exists())
+            self.assertGreater(out.stat().st_size, 5_000)
+
+    def test_combined_panels_rejects_bad_input(self):
+        equity = self._equity().filter(pl.col("arm") == "churn")
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError):       # multi-arm equity
+                charts.combined_panels(self._equity(), self._breadth(), self._samples(),
+                                       Path(d) / "c.png")
+            with self.assertRaises(ValueError):       # missing columns
+                charts.combined_panels(equity, pl.DataFrame({"x": [1]}),
+                                       self._samples(), Path(d) / "c.png")
+            with self.assertRaises(ValueError):       # empty frame
+                charts.combined_panels(equity, self._breadth().head(0),
+                                       self._samples(), Path(d) / "c.png")
+
 
 if __name__ == "__main__":
     unittest.main()
