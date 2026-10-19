@@ -6,12 +6,18 @@ import numpy as np
 
 @dataclass(frozen=True)
 class Fees:
+    """Rates on filled notional. Takers always PAY taker_rate. Makers RECEIVEmaker_rate
+    as a rebate when maker_pays=False (Polymarket-style) and PAY it when
+    maker_pays=True (Hyperliquid-style, e.g. 0.00015 = 0.015% base tier)."""
     maker_rate: float = 0.0002
     taker_rate: float = 0.002
+    maker_pays: bool = False
 
     def __post_init__(self):
         if not all(np.isfinite(x) and 0 <= x <= 1 for x in (self.maker_rate, self.taker_rate)):
             raise ValueError("fee rates must be finite fractions in [0,1]")
+        if type(self.maker_pays) is not bool:
+            raise ValueError("maker_pays must be a bool")
 
     def amount(self, price, size, group: str, *, maker: bool):
         p = np.rint(np.asarray(price) * 1e6).astype(np.int64)

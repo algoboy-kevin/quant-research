@@ -73,8 +73,11 @@ def _summary(pnl, gross, fees, rebates, drawdown, fill_count, rejections, equity
         equity_rows=equity_rows)
 
 
-def run_world(job: dict) -> dict:
-    """Run one world unbatched (reference path); module-level so spawn workers can import it."""
+def run_world(job: dict, fees: dict | None = None) -> dict:
+    """Run one world unbatched (reference path); module-level so spawn workers can import it.
+
+    `fees` is a plain dict of Fees fields shared by every job in one sweep (or None
+    for the Fees() default)."""
     from .engine import Engine
     from .fees import Fees
     from .reference_arms import build
@@ -82,7 +85,8 @@ def run_world(job: dict) -> dict:
 
     arm = build(job["arm"])[2] if isinstance(job["arm"], str) else job["arm"]
     collect = Collect.ALL if job["collect"] else Collect.NONE
-    res = Engine(fees=Fees(), collect=collect).run(World(job["cfg"], job["seed"]), arm)
+    res = Engine(fees=Fees(**fees) if fees else Fees(), collect=collect).run(
+        World(job["cfg"], job["seed"]), arm)
     ledger = res.ledger
     equity_rows = []
     if job["collect"]:
@@ -92,11 +96,12 @@ def run_world(job: dict) -> dict:
                     res.drawdown, res.fill_count, res.rejections, equity_rows)
 
 
-def run_batch_task(task: dict) -> dict:
+def run_batch_task(task: dict, fees: dict | None = None) -> dict:
     """Run one batch task: K worlds of one config x A arms over shared frames.
 
     task: cfg, seeds [K], arms [A] (spec string or arm instance), strides
     {(arm_index, world_index): [stride, ...]} for worlds whose equity series is wanted.
+    fees: plain dict of Fees fields (None = Fees() default).
     Returns {(arm_index, world_index): summary dict with equity_rows={stride: rows}}.
     """
     from .batch import run_batch
@@ -108,7 +113,8 @@ def run_batch_task(task: dict) -> dict:
     record = {}
     for (ai, k), _ in task["strides"].items():
         record.setdefault(ai, [False] * K)[k] = True
-    results = run_batch(task["cfg"], task["seeds"], arms, fees=Fees(), record=record)
+    results = run_batch(task["cfg"], task["seeds"], arms,
+                        fees=Fees(**fees) if fees else Fees(), record=record)
     out = {}
     for ai, per_world in enumerate(results):
         for k, r in enumerate(per_world):
@@ -122,7 +128,9 @@ def run_batch_task(task: dict) -> dict:
 
 
 def _execute(task: dict):
-    return run_world(task["job"]) if task["kind"] == "solo" else run_batch_task(task)
+    fees = task.get("fees")
+    return (run_world(task["job"], fees) if task["kind"] == "solo"
+            else run_batch_task(task, fees))
 
 
 # Relative cost model (ms per frame, measured on a loaded 8-core box; only the ratios
@@ -185,9 +193,9 @@ def _cap(cfg) -> int:
     return max(1, min(64, 8192 // cfg.markets))
 
 
-def _plan(jobs, workers: int, batch_size):
+def _plan(jobs, workers: int, batch_size, fees):
     """Group jobs into tasks. Returns (tasks, owners): owners[t] maps a task's output key
-    to the job indices it serves."""
+    to the job indices it serves. `fees` (plain dict or None) rides on every task."""
     from .batch import is_batchable
     from .reference_arms import build
 
@@ -227,7 +235,8 @@ def _plan(jobs, workers: int, batch_size):
 
     tasks, owners = [], []
     for i in solo:
-        tasks.append(dict(kind="solo", job=jobs[i], cost=_task_cost(jobs[i]["cfg"], 1, 1)))
+        tasks.append(dict(kind="solo", job=jobs[i], fees=fees,
+                          cost=_task_cost(jobs[i]["cfg"], 1, 1)))
         owners.append({None: [i]})
     for cfg, keys, seeds in bundles:
         lo = 0
@@ -243,7 +252,8 @@ def _plan(jobs, workers: int, batch_size):
                     if want:
                         strides[(ai, sj)] = want
             tasks.append(dict(kind="batch", cfg=cfg, seeds=chunk, arms=list(keys),
-                              strides=strides, cost=_task_cost(cfg, len(keys), len(chunk))))
+                              strides=strides, fees=fees,
+                              cost=_task_cost(cfg, len(keys), len(chunk))))
             owners.append(own)
     return tasks, owners, workers
 
@@ -270,7 +280,8 @@ def _distribute(jobs, task_out, own, results, on_done):
             on_done(i, results[i])
 
 
-def run_worlds(jobs, max_workers: int = 1, on_done=None, batch_size=None) -> list[dict]:
+def run_worlds(jobs, max_workers: int = 1, on_done=None, batch_size=None,
+               fees: dict | None = None) -> list[dict]:
     """Run jobs; results are in input order and EXACTLY equal to `run_world(job)`.
 
     Jobs of the same WorldConfig are batched (K worlds stacked on the market axis, arms
@@ -278,6 +289,9 @@ def run_worlds(jobs, max_workers: int = 1, on_done=None, batch_size=None) -> lis
     other arms run one world at a time. batch_size caps K (default: auto - the whole
     group for max_workers=1, a load-balanced size otherwise). Batching never changes
     results.
+
+    fees: plain dict of Fees fields shared by every job in the sweep (None = Fees()
+    default); kept out of the job payloads so batching cannot mix fee regimes.
 
     on_done(index, result), if given, is called as each job finishes, for progress output
     only: a batch reports its jobs together (ascending index) when the batch completes.
@@ -287,12 +301,14 @@ def run_worlds(jobs, max_workers: int = 1, on_done=None, batch_size=None) -> lis
         raise ValueError("max_workers must be a positive int")
     if batch_size is not None and (type(batch_size) is not int or batch_size < 1):
         raise ValueError("batch_size must be a positive int")
+    if fees is not None and type(fees) is not dict:
+        raise ValueError("fees must be a dict of Fees fields or None")
     for i, job in enumerate(jobs):
         _validate(job, i)
     results = [None] * len(jobs)
     if not jobs:
         return results
-    tasks, owners, max_workers = _plan(jobs, max_workers, batch_size)
+    tasks, owners, max_workers = _plan(jobs, max_workers, batch_size, fees)
     if max_workers == 1 or len(tasks) <= 1:
         for t, own in zip(tasks, owners):
             _distribute(jobs, _execute(t), own, results, on_done)

@@ -103,8 +103,9 @@ def run_batch(config: WorldConfig, seeds, arms, *, fill_config=FillConfig(), fee
 
     def book_fill(st, tiled, dq, price, maker):
         charge = fees.amount(price, np.abs(dq), tiled.group, maker=maker)
+        rebate = charge if (maker and not fees.maker_pays) else None
         st.ledger.fill(tiled.ts_ms, dq, price,
-                       rebate=charge if maker else None, fee=None if maker else charge)
+                       rebate=rebate, fee=None if rebate is not None else charge)
         changed = dq != 0
         st.last_fill_mid[changed] = tiled.mid[changed]
         st.count += np.count_nonzero(changed.reshape(st.A * K, n), axis=1)

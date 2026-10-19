@@ -186,6 +186,30 @@ def test_fee_symmetry_exact_and_native_formula():
     assert fees.amount(np.array([.5]), np.array([2]), "prediction", maker=False)[0] == 15000000
 
 
+def test_maker_pays_direction_and_ledger_identity():
+    from quant_research.worldsim.reference_arms import build
+    from quant_research.worldsim.worlds import World
+
+    _, _, arm = build("churn")
+    cfg = WorldConfig(group="perp", markets=8, steps=60)
+    out = {}
+    for maker_pays in (False, True):
+        res = Engine(fees=Fees(maker_rate=0.00015, taker_rate=0.00045, maker_pays=maker_pays),
+                     collect=Collect.NONE).run(World(cfg, 23), arm)
+        led = res.ledger
+        fees = np.asarray(led.fees_paid, dtype=np.int64)
+        rebates = np.asarray(led.rebates_received, dtype=np.int64)
+        gross = np.asarray(led.gross, dtype=np.int64)
+        # ledger identity row-wise, both directions
+        assert np.array_equal(gross, res.pnl + fees - rebates)
+        out[maker_pays] = (fees, rebates, res.fill_count)
+    fees0, reb0, fills = out[False]
+    fees1, reb1, _ = out[True]
+    assert fills > 0                            # the run must actually trade
+    assert fees0.sum() == 0 and reb0.sum() > 0  # legacy: maker charge is a rebate
+    assert fees1.sum() > 0 and reb1.sum() == 0  # Hyperliquid: maker pays the charge
+
+
 @pytest.mark.parametrize("settle", [False, True])
 def test_ledger_exact_randomized_and_roundtrips(settle):
     rng = np.random.default_rng(17)

@@ -91,6 +91,14 @@ class EngineEquality(unittest.TestCase):
             with self.subTest(name):
                 self._check(CONFIGS[name], fc, Fees(maker_rate=0.0003, taker_rate=0.001))
 
+    def test_batched_equals_single_maker_pays(self):
+        # engine.py and batch.py book the maker charge separately; the Hyperliquid
+        # direction (makers PAY) must not diverge between the two paths
+        for name in ("perp", "pred_fast", "pred_paired"):
+            with self.subTest(name):
+                self._check(CONFIGS[name], FillConfig(),
+                            Fees(maker_rate=0.00015, taker_rate=0.00045, maker_pays=True))
+
     def test_batch_is_independent_of_batch_composition(self):
         cfg = CONFIGS["perp"]
         alone = run_batch(cfg, [SEEDS[2]], [ARMS[1]])[0][0]

@@ -39,8 +39,9 @@ class Engine:
         def book_fill(frame, dq, price, maker):
             nonlocal count
             charge = self.fees.amount(price, np.abs(dq), frame.group, maker=maker)
+            rebate = charge if (maker and not self.fees.maker_pays) else None
             ledger.fill(frame.ts_ms, dq, price,
-                        rebate=charge if maker else None, fee=None if maker else charge)
+                        rebate=rebate, fee=None if rebate is not None else charge)
             changed = dq != 0
             last_fill_mid[changed] = frame.mid[changed]
             count += int(np.count_nonzero(changed))
